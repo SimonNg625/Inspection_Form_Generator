@@ -7,339 +7,339 @@ from tkinter import filedialog
 from datetime import date, timedelta
 from docx import Document
 
-# --- CONFIGURATION ---
-
-# 1. EXTENSIBILITY: Add new types here (e.g., "TEST")
-VALID_INSP_TYPES = ["RGI", "SAFE", "WSIN", "ENVI"] 
-
-KEY_MAPPING = {
-    "PI Inspection Form": "location",
-    "Project No": "project_no",
-    "Inspector": "inspector",
-    "Contractor": "contractor",
-    "Form No": "form_no",
-    "Insp Type": "insp_type",
-    "Scheduled": "scheduled",
-    "Deadline": "deadline",
-    "Performed By": "inspector",   
-    "Checked By": "checker",
-    "Date": "perform_date",         
-}
-
-# --- HELPERS ---
-
-def get_random_weekday_date_obj(year, month, start_day, end_day):
-    """Returns random Mon-Fri date object between start and end day."""
-    _, last_day_of_month = calendar.monthrange(year, month)
-    actual_start = max(1, start_day)
-    actual_end = min(end_day, last_day_of_month)
+# ==========================================
+# 1. CONFIGURATION
+# ==========================================
+class Config:
+    VALID_INSP_TYPES = ["RGI", "SAFE", "WSIN", "ENVI"]
     
-    if actual_start > actual_end:
-        return date(year, month, actual_end)
-
-    valid_dates = []
-    for day in range(actual_start, actual_end + 1):
-        try:
-            curr_date = date(year, month, day)
-            if curr_date.weekday() < 5: 
-                valid_dates.append(curr_date)
-        except ValueError:
-            continue
-            
-    if valid_dates:
-        return random.choice(valid_dates)
-    return date(year, month, actual_start)
-
-def find_next_real_cell(row_cells, current_index):
-    """Skips merged cells to find the actual value cell."""
-    current_cell = row_cells[current_index]
-    next_index = current_index + 1
-    while next_index < len(row_cells):
-        next_cell = row_cells[next_index]
-        if next_cell._element is not current_cell._element:
-            return next_cell
-        next_index += 1
-    return None
-
-def safe_update_cell(cell, new_value):
-    """Updates cell text preserving format."""
-    if not cell: return
-    if cell.paragraphs:
-        p = cell.paragraphs[0]
-        if p.runs:
-            p.runs[0].text = str(new_value)
-            for run in p.runs[1:]:
-                run.text = ""
-        else:
-            p.add_run(str(new_value))
-    else:
-        cell.text = str(new_value)
-
-def extract_project_details(doc):
-    """Reads the uploaded template to find existing Project/Location/Names."""
-    extracted = {
-        "location": "Unknown Location",
-        "project_no": "Unknown Project",
-        "inspector": "Unknown Inspector",
-        "contractor": "Unknown Contractor",
-        "checker": "Unknown Checker"
-    }
-    
-    keys_to_extract = {
-        "PI Inspection Form": "location", 
-        "Location": "location",           
+    KEY_MAPPING = {
+        "PI Inspection Form": "location",
         "Project No": "project_no",
         "Inspector": "inspector",
         "Contractor": "contractor",
-        "Checked By": "checker"
+        "Form No": "form_no",
+        "Insp Type": "insp_type",
+        "Scheduled": "scheduled",
+        "Deadline": "deadline",
+        "Performed By": "inspector",   
+        "Checked By": "checker",
+        "Date": "perform_date",         
     }
 
-    print("\n>> Scanning template for project details...")
+# ==========================================
+# 2. DOCUMENT UTILITIES (Static Helpers)
+# ==========================================
+class DocUtils:
+    """Static helper methods for low-level Docx manipulation."""
     
-    for table in doc.tables:
-        for row in table.rows:
-            cells = row.cells
-            for i, cell in enumerate(cells):
-                cell_text = cell.text.strip()
-                for key, field_name in keys_to_extract.items():
-                    if key in cell_text:
-                        if key == "Inspector" and "PI Inspection" in cell_text:
-                            continue
-                        target_cell = find_next_real_cell(cells, i)
-                        if target_cell:
-                            val = target_cell.text.strip()
-                            if val:
-                                extracted[field_name] = val
-                                print(f"   Found {field_name.upper()}: {val}")
-    return extracted
+    @staticmethod
+    def find_next_real_cell(row_cells, current_index):
+        """Skips merged cells to find the actual value cell."""
+        current_cell = row_cells[current_index]
+        next_index = current_index + 1
+        while next_index < len(row_cells):
+            next_cell = row_cells[next_index]
+            if next_cell._element is not current_cell._element:
+                return next_cell
+            next_index += 1
+        return None
 
-def process_document(doc, data_dict):
-    """Scans and updates tables."""
-    for table in doc.tables:
-        for row in table.rows:
-            cells = row.cells
-            for i, cell in enumerate(cells):
-                cell_text = cell.text.strip()
-                for key, data_field in KEY_MAPPING.items():
-                    if key in cell_text:
-                        if key == "Inspector" and "PI Inspection" in cell_text:
-                            continue
-                        target_cell = find_next_real_cell(cells, i)
-                        if target_cell:
-                            safe_update_cell(target_cell, data_dict[data_field])
-
-def detect_type_from_filename(filename):
-    """Checks filename against VALID_INSP_TYPES list."""
-    fname_upper = os.path.basename(filename).upper()
-    
-    # Check against the list defined in CONFIGURATION
-    for type_code in VALID_INSP_TYPES:
-        if type_code in fname_upper:
-            return type_code
-            
-    return "UNKNOWN"
-
-def select_file_dialog():
-    """Opens file explorer and returns path."""
-    root = tk.Tk()
-    root.withdraw() 
-    root.attributes('-topmost', True) 
-    filename = filedialog.askopenfilename(
-        title="Select Inspection Form Template",
-        filetypes=[("Word Documents", "*.docx")]
-    )
-    root.destroy()
-    return filename
-
-# --- MAIN EXECUTION ---
-
-def main():
-    print("--- Universal Inspection Form Generator (Strict Validation) ---")
-    
-    # --- NEW: OUTER LOOP TO ALLOW RESTARTING ---
-    while True:
-        
-        # 1. INITIAL FILE SELECTION (With Loop for Validation)
-        print("\nSTEP 1: Select your Template")
-        
-        template_filename = None
-        template_type = "UNKNOWN"
-
-        while True:
-            template_filename = select_file_dialog()
-            
-            if not template_filename:
-                print(">> No file selected. Exiting program.")
-                return # Exits the entire function/program
-
-            template_type = detect_type_from_filename(template_filename)
-
-            # CHECK: Is the file type allowed?
-            if template_type == "UNKNOWN":
-                print(f"\n>> [!] ERROR: Invalid Filename.")
-                print(f"   File '{os.path.basename(template_filename)}' does not contain a valid type keyword.")
-                print(f"   Allowed types: {VALID_INSP_TYPES}")
-                print("   Please rename your file or select the correct one.")
-                input("   Press Enter to try again...") 
-                continue 
+    @staticmethod
+    def safe_update_cell(cell, new_value):
+        """Updates cell text preserving format."""
+        if not cell: return
+        if cell.paragraphs:
+            p = cell.paragraphs[0]
+            if p.runs:
+                p.runs[0].text = str(new_value)
+                for run in p.runs[1:]:
+                    run.text = ""
             else:
-                print(f">> Loaded '{os.path.basename(template_filename)}' ([{template_type}])")
-                break 
+                p.add_run(str(new_value))
+        else:
+            cell.text = str(new_value)
 
-        # 2. AUTO-EXTRACT DETAILS
-        doc_for_scanning = Document(template_filename)
-        project_data = extract_project_details(doc_for_scanning)
+# ==========================================
+# 3. DATE LOGIC
+# ==========================================
+class DateEngine:
+    """Handles calendar calculations."""
+    
+    @staticmethod
+    def get_random_weekday(year, month, start_day, end_day):
+        _, last_day_of_month = calendar.monthrange(year, month)
+        actual_start = max(1, start_day)
+        actual_end = min(end_day, last_day_of_month)
         
-        print("\n>> Using the following details from the template:")
-        print(f"   - Project: {project_data['project_no']}")
-        print(f"   - Location: {project_data['location']}")
-        
-        # 3. TYPE SELECTION & VALIDATION LOOP
-        requested_type = ""
-        year = 2025
+        if actual_start > actual_end:
+            return date(year, month, actual_end)
 
-        while True:
-            # Ask for input
-            type_year_input = input(f"\nWhich Insp Type and year? (e.g., {template_type} 2025) [Press Enter for default]: ").strip()
-            
-            # --- STRICT INPUT PARSING ---
-            if not type_year_input:
-                requested_type = template_type
-                year = 2025
-                print(f">> Using default: {requested_type} {year}")
-            else:
-                try:
-                    parts = type_year_input.split()
-                    if len(parts) < 2:
-                        raise ValueError("Missing Year")
-                    
-                    requested_type = parts[0].upper()
-                    year = int(parts[1])
-                    
-                    if year < 1990 or year > 2100:
-                        print(">> [!] Error: Please enter a realistic year (e.g., 2025).")
-                        continue
-                        
-                except ValueError:
-                    print(">> [!] Invalid format. Please enter 'TYPE YEAR' (e.g., SAFE 2025).")
-                    continue 
-
-            # --- CONFLICT CHECK ---
-            if requested_type != template_type:
-                print(f"\n[!] CONFLICT DETECTED")
-                print(f"    You uploaded a [{template_type}] file.")
-                print(f"    But you asked to generate [{requested_type}] forms.")
+        valid_dates = []
+        for day in range(actual_start, actual_end + 1):
+            try:
+                curr_date = date(year, month, day)
+                if curr_date.weekday() < 5: # Mon-Fri
+                    valid_dates.append(curr_date)
+            except ValueError:
+                continue
                 
-                # --- LOOP UNTIL VALID CHOICE IS MADE ---
-                valid_fix = False
-                while not valid_fix:
-                    print("\nHow would you like to fix this?")
-                    print("1. Re-upload the correct file")
-                    print("2. Change my request")
-                    
-                    fix_choice = input("Enter 1 or 2: ").strip()
-                    
-                    if fix_choice == '1':
-                        print("\n>> Opening file picker...")
-                        
-                        # Nested loop for re-upload validation
-                        new_file_valid = False
-                        while not new_file_valid:
-                            new_file = select_file_dialog()
-                            if not new_file:
-                                print(">> No file selected. Keeping original file.")
-                                new_file_valid = True # Exit re-upload loop, but didn't actually fix conflict
-                            else:
-                                new_type = detect_type_from_filename(new_file)
-                                if new_type == "UNKNOWN":
-                                    print(f">> [!] ERROR: Filename must contain: {VALID_INSP_TYPES}")
-                                    input("Press Enter to try again...")
-                                    continue
-                                else:
-                                    # Success
-                                    template_filename = new_file
-                                    template_type = new_type
-                                    doc_for_scanning = Document(template_filename)
-                                    project_data = extract_project_details(doc_for_scanning)
-                                    print(f">> New file loaded: '{os.path.basename(template_filename)}' ([{template_type}])")
-                                    new_file_valid = True
-                        
-                        valid_fix = True 
+        if valid_dates:
+            return random.choice(valid_dates)
+        return date(year, month, actual_start)
 
-                    elif fix_choice == '2':
-                        valid_fix = True 
-                    
-                    else:
-                        print(">> [!] Invalid choice. Please enter '1' or '2' only.")
-                
-                continue # Restart Main Loop
+# ==========================================
+# 4. TEMPLATE MODEL
+# ==========================================
+class InspectionTemplate:
+    """Represents the uploaded Word document."""
+    
+    def __init__(self, filepath):
+        self.filepath = filepath
+        self.filename = os.path.basename(filepath)
+        self.type = self._detect_type()
+        self.doc_obj = Document(filepath) # Keep a reference for scanning
+        self.project_details = self._extract_details()
 
-            else:
-                break 
+    def _detect_type(self):
+        fname_upper = self.filename.upper()
+        for type_code in Config.VALID_INSP_TYPES:
+            if type_code in fname_upper:
+                return type_code
+        return "UNKNOWN"
 
-        # 4. GENERATE & SAVE TO DOWNLOADS
-        downloads_folder = os.path.join(os.path.expanduser("~"), "Downloads")
-        output_dir_name = f"{requested_type}_{year}_Forms_Generated"
-        output_dir = os.path.join(downloads_folder, output_dir_name)
-
-        if os.path.exists(output_dir): 
-            shutil.rmtree(output_dir)
-        os.makedirs(output_dir)
+    def _extract_details(self):
+        extracted = {
+            "location": "Unknown", "project_no": "Unknown",
+            "inspector": "Unknown", "contractor": "Unknown", "checker": "Unknown"
+        }
+        keys = {
+            "PI Inspection Form": "location", "Location": "location",           
+            "Project No": "project_no", "Inspector": "inspector",
+            "Contractor": "contractor", "Checked By": "checker"
+        }
         
-        print(f"\n>> Generating {requested_type} forms in: {output_dir}")
-        form_counter = 1
+        print("\n>> Scanning template for project details...")
+        for table in self.doc_obj.tables:
+            for row in table.rows:
+                cells = row.cells
+                for i, cell in enumerate(cells):
+                    cell_text = cell.text.strip()
+                    for key, field in keys.items():
+                        if key in cell_text:
+                            if key == "Inspector" and "PI Inspection" in cell_text: continue
+                            
+                            target = DocUtils.find_next_real_cell(cells, i)
+                            if target and target.text.strip():
+                                extracted[field] = target.text.strip()
+                                print(f"   Found {field.upper()}: {extracted[field]}")
+        return extracted
 
+# ==========================================
+# 5. GENERATOR ENGINE
+# ==========================================
+class FormGenerator:
+    """Handles the creation of batch files."""
+    
+    def __init__(self, template_model):
+        self.template = template_model
+
+    def generate_batch(self, req_type, year):
+        # Setup Output Directory
+        downloads = os.path.join(os.path.expanduser("~"), "Downloads")
+        out_name = f"{req_type}_{year}_Forms_Generated"
+        out_dir = os.path.join(downloads, out_name)
+
+        if os.path.exists(out_dir): shutil.rmtree(out_dir)
+        os.makedirs(out_dir)
+
+        print(f"\n>> Generating {req_type} forms in: {out_dir}")
+        
+        counter = 1
         for month in range(1, 13):
+            # Calculate Dates
+            dates = self._calculate_dates_for_month(req_type, year, month)
+            
+            # Common Data
             month_str = f"{month:02d}"
-            _, last_day_val = calendar.monthrange(year, month)
-            scheduled = f"01/{month_str}/{year}"
-            deadline = f"{last_day_val}/{month_str}/{year}"
+            _, last_day = calendar.monthrange(year, month)
+            
+            base_data = self.template.project_details.copy()
+            base_data["scheduled"] = f"01/{month_str}/{year}"
+            base_data["deadline"] = f"{last_day}/{month_str}/{year}"
+            base_data["insp_type"] = req_type
 
-            if requested_type == "SAFE":
-                date1 = get_random_weekday_date_obj(year, month, 1, 7)
-                min_gap_date = date1 + timedelta(days=14)
-                date2 = get_random_weekday_date_obj(year, month, min_gap_date.day, last_day_val)
-                dates_list = [date1, date2]
-            else:
-                dates_list = [get_random_weekday_date_obj(year, month, 1, last_day_val)]
-
-            for perform_dt in dates_list:
+            # Generate Files
+            for perform_dt in dates:
                 date_str = perform_dt.strftime("%d/%m/%Y")
-                form_no = f"IPRJ{requested_type}{form_counter:04d}"
+                form_no = f"IPRJ{req_type}{counter:04d}"
                 
-                final_data = project_data.copy()
-                final_data.update({
-                    "form_no": form_no,
-                    "insp_type": requested_type,
-                    "scheduled": scheduled,
-                    "deadline": deadline,
-                    "perform_date": date_str
-                })
+                final_data = base_data.copy()
+                final_data["form_no"] = form_no
+                final_data["perform_date"] = date_str
 
-                doc = Document(template_filename)
-                process_document(doc, final_data)
-                doc.save(os.path.join(output_dir, f"{form_no}.docx"))
+                self._create_single_file(final_data, out_dir, form_no)
                 print(f"Created: {form_no}.docx | {date_str}")
-                form_counter += 1
+                counter += 1
 
         print(f"\nSUCCESS: Files saved to Downloads folder.")
-        os.startfile(output_dir)
-        
-        # --- NEW: ASK TO RESTART OR EXIT ---
-        print("\n" + "="*50)
-        print("JOB COMPLETE. What would you like to do next?")
-        print("1. Generate another type of inspection form")
-        print("2. Exit Program")
-        
-        next_step = input("Enter 1 or 2: ").strip()
-        
-        if next_step == '1':
-            print("\n" * 2) # Add some space
-            print(">> Restarting program...")
-            continue # Loops back to "STEP 1: Select your Template"
-        else:
-            print(">> Exiting. Goodbye!")
-            break # Breaks the "while True" loop and ends program
+        os.startfile(out_dir)
 
+    def _calculate_dates_for_month(self, req_type, year, month):
+        _, last_day = calendar.monthrange(year, month)
+        if req_type == "SAFE":
+            d1 = DateEngine.get_random_weekday(year, month, 1, 7)
+            min_gap = d1 + timedelta(days=14)
+            d2 = DateEngine.get_random_weekday(year, month, min_gap.day, last_day)
+            return [d1, d2]
+        else:
+            return [DateEngine.get_random_weekday(year, month, 1, last_day)]
+
+    def _create_single_file(self, data, out_dir, fname):
+        # Open a fresh copy of the doc for every iteration
+        doc = Document(self.template.filepath)
+        
+        for table in doc.tables:
+            for row in table.rows:
+                cells = row.cells
+                for i, cell in enumerate(cells):
+                    text = cell.text.strip()
+                    for key, field in Config.KEY_MAPPING.items():
+                        if key in text:
+                            if key == "Inspector" and "PI Inspection" in text: continue
+                            target = DocUtils.find_next_real_cell(cells, i)
+                            if target:
+                                DocUtils.safe_update_cell(target, data[field])
+        
+        doc.save(os.path.join(out_dir, f"{fname}.docx"))
+
+# ==========================================
+# 6. USER INTERFACE
+# ==========================================
+class UserInterface:
+    """Handles inputs, outputs, and dialogs."""
+    
+    @staticmethod
+    def open_file_dialog():
+        root = tk.Tk()
+        root.withdraw() 
+        root.attributes('-topmost', True) 
+        fn = filedialog.askopenfilename(
+            title="Select Inspection Form Template",
+            filetypes=[("Word Documents", "*.docx")]
+        )
+        root.destroy()
+        return fn
+
+    @staticmethod
+    def ask_type_and_year(default_type):
+        while True:
+            val = input(f"\nWhich Insp Type and year? (e.g., {default_type} 2025) [Press Enter for default]: ").strip()
+            if not val:
+                print(f">> Using default: {default_type} 2025")
+                return default_type, 2025
+            
+            try:
+                parts = val.split()
+                if len(parts) < 2: raise ValueError
+                
+                req_type = parts[0].upper()
+                year = int(parts[1])
+                
+                if not (1990 < year < 2100):
+                    print(">> [!] Error: Realistic year required.")
+                    continue
+                return req_type, year
+            except ValueError:
+                print(">> [!] Invalid format. Try 'SAFE 2025'.")
+
+    @staticmethod
+    def ask_conflict_resolution(uploaded, requested):
+        print(f"\n[!] CONFLICT: Uploaded [{uploaded}] vs Requested [{requested}]")
+        while True:
+            print("1. Re-upload correct file")
+            print("2. Change request")
+            choice = input("Enter 1 or 2: ").strip()
+            if choice in ['1', '2']: return choice
+            print("Invalid input.")
+
+    @staticmethod
+    def ask_next_step():
+        print("\n" + "="*50)
+        print("JOB COMPLETE. What next?")
+        print("1. Generate another")
+        print("2. Exit")
+        return input("Enter 1 or 2: ").strip()
+
+# ==========================================
+# 7. MAIN CONTROLLER
+# ==========================================
+class Application:
+    """Orchestrates the program flow."""
+    
+    def __init__(self):
+        self.ui = UserInterface()
+        self.current_template = None
+
+    def _acquire_template(self):
+        """Loop until valid template is loaded."""
+        print("\nSTEP 1: Select your Template")
+        while True:
+            path = self.ui.open_file_dialog()
+            if not path:
+                print(">> No file selected. Exiting.")
+                return False
+            
+            template = InspectionTemplate(path)
+            
+            if template.type == "UNKNOWN":
+                print(f"\n>> [!] ERROR: Filename must contain {Config.VALID_INSP_TYPES}")
+                input("   Press Enter to retry...")
+                continue
+            
+            print(f">> Loaded '{template.filename}' ([{template.type}])")
+            self.current_template = template
+            return True
+
+    def run(self):
+        print("--- Universal Inspection Form Generator (OOP Version) ---")
+        
+        while True:
+            # 1. Get Template
+            if not self._acquire_template():
+                break
+
+            # 2. Get Request & Validate
+            while True:
+                req_type, year = self.ui.ask_type_and_year(self.current_template.type)
+                
+                if req_type != self.current_template.type:
+                    choice = self.ui.ask_conflict_resolution(self.current_template.type, req_type)
+                    if choice == '1': # Re-upload
+                        if self._acquire_template():
+                            continue # Check inputs again with new template
+                        else:
+                            return # Exit if they cancel re-upload
+                    elif choice == '2': # Change request
+                        continue
+                
+                # If we get here, everything is valid
+                break
+
+            # 3. Generate
+            generator = FormGenerator(self.current_template)
+            generator.generate_batch(req_type, year)
+
+            # 4. Loop or Exit
+            if self.ui.ask_next_step() != '1':
+                print(">> Exiting. Goodbye!")
+                break
+            else:
+                print("\n>> Restarting...")
+
+# ==========================================
+# ENTRY POINT
+# ==========================================
 if __name__ == "__main__":
-    main()
+    app = Application()
+    app.run()
