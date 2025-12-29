@@ -17,13 +17,5 @@ A robust Python automation tool designed to generate yearly batches of Inspectio
 
 ## 🛠️ Prerequisites & Installation
 
-### 1. Install Python
-Ensure you have Python installed. [Download Python Here](https://www.python.org/downloads/).
-
-### 2. Install Dependencies
-This script relies on `python-docx` to read/write Word files and `tkinter` (usually built-in) for the file dialogs.
-
-Open your terminal or command prompt and run:
-
-```bash
-pip install python-docx
+### 1. Execute EXE
+Download InspectionFormGenerator.exe and double-click it to execute it.
